@@ -1,80 +1,90 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+import json
 import httpx
 from bs4 import BeautifulSoup
 import random
-import time
 import datetime
-
-app = FastAPI()
+import time
 
 BASE_URL = "https://t.me/"
 
-@app.get("/api")
-async def telegram_api(username: str = None):
-    if not username:
-        return {
-            "success": False,
-            "error": "Username parameter required",
-            "usage": "your-domain/api?username=USERNAME",
+def handler(request):
+    try:
+        query = request.get("query", {})
+        username = query.get("username")
+
+        if not username:
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({
+                    "success": False,
+                    "error": "Username parameter required",
+                    "usage": "/api?username=USERNAME",
+                    "developer": "@istgrehu",
+                    "api_made_by": "Rehu"
+                })
+            }
+
+        start = time.time()
+
+        profile_type = detect_profile_type(username)
+        web_data = scrape_telegram_web(username)
+        channels_groups = find_channels_groups(username)
+
+        result = {
+            "success": True,
+            "username": username,
             "developer": "@istgrehu",
-            "api_made_by": "Rehu"
+            "api_made_by": "Rehu",
+            "timestamp": int(time.time()),
+            "data": {
+                "profile": {
+                    "name": web_data.get("name", f"@{username}"),
+                    "bio": web_data.get("bio"),
+                    "verified": web_data.get("verified", False),
+                    "premium": web_data.get("premium", False),
+                    "has_photo": web_data.get("has_photo", True),
+                    "profile_type": profile_type,
+                    "profile_photo": web_data.get("profile_photo")
+                },
+                "contacts": {
+                    "telegram_link": BASE_URL + username,
+                    "direct_message": f"tg://resolve?domain={username}",
+                    "is_public": web_data.get("is_public", True)
+                },
+                "activity": {
+                    "online_status": random.choice(["online", "offline", "recently"]),
+                    "last_seen": str(datetime.datetime.now() - datetime.timedelta(seconds=random.randint(300, 86400))),
+                    "subscribers": get_subscribers(profile_type),
+                    "activity_score": random.randint(1, 100)
+                },
+                "channels_groups": channels_groups,
+                "analysis": {
+                    "profile_quality": random.choice(["high", "medium", "low"]),
+                    "account_age": str(random.randint(1, 60)) + " months"
+                }
+            },
+            "processing_time": str(round(time.time() - start, 2)) + "s"
         }
 
-    start = time.time()
-    profile_type = await detect_profile_type(username)
-    web_data = await scrape_telegram_web(username)
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(result)
+        }
 
-    data = {
-        "success": True,
-        "username": username,
-        "developer": "@istgrehu",
-        "api_made_by": "Rehu",
-        "timestamp": int(time.time()),
-        "data": {
-            "profile": {
-                "name": web_data.get("name", f"@{username}"),
-                "bio": web_data.get("bio"),
-                "verified": web_data.get("verified", False),
-                "premium": web_data.get("premium", False),
-                "has_photo": web_data.get("has_photo", True),
-                "profile_type": profile_type,
-                "profile_photo": web_data.get("profile_photo")
-            },
-            "contacts": {
-                "telegram_link": BASE_URL + username,
-                "direct_message": f"tg://resolve?domain={username}",
-                "is_public": web_data.get("is_public", True)
-            },
-            "activity": {
-                "online_status": random.choice(["online", "offline", "recently"]),
-                "last_seen": str(datetime.datetime.now() - datetime.timedelta(seconds=random.randint(300, 86400))),
-                "subscribers": get_subscribers(profile_type),
-                "activity_score": random.randint(1, 100)
-            },
-            "channels_groups": await find_channels_groups(username),
-            "analysis": {
-                "profile_quality": random.choice(["high", "medium", "low"]),
-                "account_age": str(random.randint(1, 60)) + " months"
-            }
-        },
-        "processing_time": str(round(time.time() - start, 2)) + "s"
-    }
-
-    return JSONResponse(data)
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)})
+        }
 
 
-# -----------------------------
-# Helper Functions
-# -----------------------------
-
-async def detect_profile_type(username):
-    url = BASE_URL + username
-
+def detect_profile_type(username):
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=8) as client:
-            r = await client.get(url)
-            html = r.text
+        url = BASE_URL + username
+        r = httpx.get(url, follow_redirects=True, timeout=8)
+        html = r.text
     except:
         return "unknown"
 
@@ -82,18 +92,16 @@ async def detect_profile_type(username):
         return "channel"
     elif "tgme_group_info" in html:
         return "group"
-    else:
-        return "user"
+    return "user"
 
 
-async def scrape_telegram_web(username):
+def scrape_telegram_web(username):
     url = BASE_URL + username
     data = {}
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
-            r = await client.get(url)
-            html = r.text
+        r = httpx.get(url, follow_redirects=True, timeout=10)
+        html = r.text
     except:
         return {"name": f"@{username}", "is_public": False, "has_photo": False}
 
@@ -110,20 +118,18 @@ async def scrape_telegram_web(username):
     data["has_photo"] = bool(photo)
     data["profile_photo"] = photo["src"] if photo else None
     data["is_public"] = True
-
     return data
 
 
-async def url_exists(url):
+def url_exists(url):
     try:
-        async with httpx.AsyncClient(timeout=3) as client:
-            r = await client.get(url)
-            return r.status_code == 200
+        r = httpx.get(url, timeout=3)
+        return r.status_code == 200
     except:
         return False
 
 
-async def find_channels_groups(username):
+def find_channels_groups(username):
     patterns = [
         f"{username}_channel",
         f"{username}_chat",
@@ -139,7 +145,7 @@ async def find_channels_groups(username):
     results = []
     for p in patterns:
         url = BASE_URL + p
-        exists = await url_exists(url)
+        exists = url_exists(url)
         results.append({
             "username": p,
             "url": url,
